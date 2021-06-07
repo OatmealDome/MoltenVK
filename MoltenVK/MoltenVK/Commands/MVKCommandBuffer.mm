@@ -20,7 +20,6 @@
 #include "MVKCommandPool.h"
 #include "MVKQueue.h"
 #include "MVKPipeline.h"
-#include "MVKFramebuffer.h"
 #include "MVKQueryPool.h"
 #include "MVKFoundation.h"
 #include "MTLRenderPassDescriptor+MoltenVK.h"
@@ -286,15 +285,19 @@ void MVKCommandEncoder::encodeSecondary(MVKCommandBuffer* secondaryCmdBuffer) {
 void MVKCommandEncoder::beginRenderpass(MVKCommand* passCmd,
 										VkSubpassContents subpassContents,
 										MVKRenderPass* renderPass,
-										MVKFramebuffer* framebuffer,
+										VkExtent2D framebufferExtent,
+										uint32_t framebufferLayerCount,
 										VkRect2D& renderArea,
-										MVKArrayRef<VkClearValue> clearValues) {
+										MVKArrayRef<VkClearValue> clearValues,
+										MVKArrayRef<MVKImageView*> attachments) {
 	_renderPass = renderPass;
-	_framebuffer = framebuffer;
+	_framebufferExtent = framebufferExtent;
+	_framebufferLayerCount = framebufferLayerCount;
 	_renderArea = renderArea;
 	_isRenderingEntireAttachment = (mvkVkOffset2DsAreEqual(_renderArea.offset, {0,0}) &&
-									mvkVkExtent2DsAreEqual(_renderArea.extent, _framebuffer->getExtent2D()));
+									mvkVkExtent2DsAreEqual(_renderArea.extent, _framebufferExtent));
 	_clearValues.assign(clearValues.begin(), clearValues.end());
+	_attachments.assign(attachments.begin(), attachments.end());
 	setSubpass(passCmd, subpassContents, 0);
 }
 
@@ -334,7 +337,14 @@ void MVKCommandEncoder::beginMetalRenderPass(bool loadOverride) {
     endCurrentMetalEncoding();
 
     MTLRenderPassDescriptor* mtlRPDesc = [MTLRenderPassDescriptor renderPassDescriptor];
-    getSubpass()->populateMTLRenderPassDescriptor(mtlRPDesc, _multiviewPassIndex, _framebuffer, _clearValues.contents(), _isRenderingEntireAttachment, loadOverride);
+	getSubpass()->populateMTLRenderPassDescriptor(mtlRPDesc,
+												  _multiviewPassIndex,
+												  _framebufferExtent,
+												  _framebufferLayerCount,
+												  _attachments.contents(),
+												  _clearValues.contents(),
+												  _isRenderingEntireAttachment,
+												  loadOverride);
     if (_cmdBuffer->_needsVisibilityResultMTLBuffer) {
         if (!_visibilityResultMTLBuffer) {
             _visibilityResultMTLBuffer = getTempMTLBuffer(_pDeviceMetalFeatures->maxQueryBufferSize, true, true);
@@ -342,7 +352,7 @@ void MVKCommandEncoder::beginMetalRenderPass(bool loadOverride) {
         mtlRPDesc.visibilityResultBuffer = _visibilityResultMTLBuffer->_mtlBuffer;
     }
 
-    VkExtent2D fbExtent = _framebuffer->getExtent2D();
+	VkExtent2D fbExtent = _framebufferExtent;
     mtlRPDesc.renderTargetWidthMVK = max(min(_renderArea.offset.x + _renderArea.extent.width, fbExtent.width), 1u);
     mtlRPDesc.renderTargetHeightMVK = max(min(_renderArea.offset.y + _renderArea.extent.height, fbExtent.height), 1u);
     if (_canUseLayeredRendering) {
@@ -362,9 +372,9 @@ void MVKCommandEncoder::beginMetalRenderPass(bool loadOverride) {
         if (getSubpass()->isMultiview()) {
             // In the case of a multiview pass, the framebuffer layer count will be one.
             // We need to use the view count for this multiview pass.
-            renderTargetArrayLength = getSubpass()->getViewCountInMetalPass(_multiviewPassIndex);
+			renderTargetArrayLength = getSubpass()->getViewCountInMetalPass(_multiviewPassIndex);
         } else {
-            renderTargetArrayLength = _framebuffer->getLayerCount();
+			renderTargetArrayLength = _framebufferLayerCount;
         }
         // Metal does not allow layered render passes where some RTs are 3D and others are 2D.
         if (!(found3D && found2D) || renderTargetArrayLength > 1) {
@@ -393,7 +403,10 @@ void MVKCommandEncoder::beginMetalRenderPass(bool loadOverride) {
 }
 
 void MVKCommandEncoder::encodeStoreActions(bool storeOverride) {
-	getSubpass()->encodeStoreActions(this, _isRenderingEntireAttachment, storeOverride);
+	getSubpass()->encodeStoreActions(this,
+									 _isRenderingEntireAttachment,
+									 _attachments.contents(),
+									 storeOverride);
 }
 
 MVKRenderSubpass* MVKCommandEncoder::getSubpass() { return _renderPass->getSubpass(_renderSubpassIndex); }
@@ -508,7 +521,7 @@ void MVKCommandEncoder::clearRenderArea() {
 		VkClearRect clearRect;
 		clearRect.rect = _renderArea;
 		clearRect.baseArrayLayer = 0;
-		clearRect.layerCount = _framebuffer->getLayerCount();
+		clearRect.layerCount = _framebufferLayerCount;
 
 		// Create and execute a temporary clear attachments command.
 		// To be threadsafe...do NOT acquire and return the command from the pool.
@@ -555,7 +568,9 @@ void MVKCommandEncoder::endRenderpass() {
 	endMetalRenderEncoding();
 
 	_renderPass = nullptr;
-	_framebuffer = nullptr;
+	_framebufferExtent = {};
+	_framebufferLayerCount = 0;
+	_attachments.clear();
 	_renderSubpassIndex = 0;
 }
 
@@ -792,48 +807,60 @@ MVKCommandEncoder::MVKCommandEncoder(MVKCommandBuffer* cmdBuffer) : MVKBaseDevic
 #pragma mark -
 #pragma mark Support functions
 
+NSString* mvkMTLCommandBufferLabel(MVKCommandUse cmdUse) {
+	switch (cmdUse) {
+		case kMVKCommandUseEndCommandBuffer:                return @"vkEndCommandBuffer (Prefilled) CommandBuffer";
+		case kMVKCommandUseQueueSubmit:                     return @"vkQueueSubmit CommandBuffer";
+		case kMVKCommandUseQueuePresent:                    return @"vkQueuePresentKHR CommandBuffer";
+		case kMVKCommandUseQueueWaitIdle:                   return @"vkQueueWaitIdle CommandBuffer";
+		case kMVKCommandUseDeviceWaitIdle:                  return @"vkDeviceWaitIdle CommandBuffer";
+		case kMVKCommandUseAcquireNextImage:                return @"vkAcquireNextImageKHR CommandBuffer";
+		case kMVKCommandUseInvalidateMappedMemoryRanges:    return @"vkInvalidateMappedMemoryRanges CommandBuffer";
+		default:                                            return @"Unknown Use CommandBuffer";
+	}
+}
+
 NSString* mvkMTLRenderCommandEncoderLabel(MVKCommandUse cmdUse) {
     switch (cmdUse) {
-        case kMVKCommandUseBeginRenderPass:         return @"vkCmdBeginRenderPass RenderEncoder";
-        case kMVKCommandUseNextSubpass:             return @"vkCmdNextSubpass RenderEncoder";
-        case kMVKCommandUseBlitImage:               return @"vkCmdBlitImage RenderEncoder";
-        case kMVKCommandUseResolveImage:            return @"vkCmdResolveImage (resolve stage) RenderEncoder";
-        case kMVKCommandUseResolveExpandImage:      return @"vkCmdResolveImage (expand stage) RenderEncoder";
-        case kMVKCommandUseClearColorImage:         return @"vkCmdClearColorImage RenderEncoder";
-        case kMVKCommandUseClearDepthStencilImage:  return @"vkCmdClearDepthStencilImage RenderEncoder";
-        default:                                    return @"Unknown Use RenderEncoder";
+        case kMVKCommandUseBeginRenderPass:                 return @"vkCmdBeginRenderPass RenderEncoder";
+        case kMVKCommandUseNextSubpass:                     return @"vkCmdNextSubpass RenderEncoder";
+        case kMVKCommandUseBlitImage:                       return @"vkCmdBlitImage RenderEncoder";
+        case kMVKCommandUseResolveImage:                    return @"vkCmdResolveImage (resolve stage) RenderEncoder";
+        case kMVKCommandUseResolveExpandImage:              return @"vkCmdResolveImage (expand stage) RenderEncoder";
+        case kMVKCommandUseClearColorImage:                 return @"vkCmdClearColorImage RenderEncoder";
+        case kMVKCommandUseClearDepthStencilImage:          return @"vkCmdClearDepthStencilImage RenderEncoder";
+        default:                                            return @"Unknown Use RenderEncoder";
     }
 }
 
 NSString* mvkMTLBlitCommandEncoderLabel(MVKCommandUse cmdUse) {
     switch (cmdUse) {
-        case kMVKCommandUsePipelineBarrier:     return @"vkCmdPipelineBarrier BlitEncoder";
-        case kMVKCommandUseCopyImage:           return @"vkCmdCopyImage BlitEncoder";
-        case kMVKCommandUseResolveCopyImage:    return @"vkCmdResolveImage (copy stage) RenderEncoder";
-        case kMVKCommandUseCopyBuffer:          return @"vkCmdCopyBuffer BlitEncoder";
-        case kMVKCommandUseCopyBufferToImage:   return @"vkCmdCopyBufferToImage BlitEncoder";
-        case kMVKCommandUseCopyImageToBuffer:   return @"vkCmdCopyImageToBuffer BlitEncoder";
-        case kMVKCommandUseFillBuffer:          return @"vkCmdFillBuffer BlitEncoder";
-        case kMVKCommandUseUpdateBuffer:        return @"vkCmdUpdateBuffer BlitEncoder";
-        case kMVKCommandUseResetQueryPool:      return @"vkCmdResetQueryPool BlitEncoder";
-        case kMVKCommandUseCopyQueryPoolResults:return @"vkCmdCopyQueryPoolResults BlitEncoder";
-        default:                                return @"Unknown Use BlitEncoder";
+        case kMVKCommandUsePipelineBarrier:                 return @"vkCmdPipelineBarrier BlitEncoder";
+        case kMVKCommandUseCopyImage:                       return @"vkCmdCopyImage BlitEncoder";
+        case kMVKCommandUseResolveCopyImage:                return @"vkCmdResolveImage (copy stage) RenderEncoder";
+        case kMVKCommandUseCopyBuffer:                      return @"vkCmdCopyBuffer BlitEncoder";
+        case kMVKCommandUseCopyBufferToImage:               return @"vkCmdCopyBufferToImage BlitEncoder";
+        case kMVKCommandUseCopyImageToBuffer:               return @"vkCmdCopyImageToBuffer BlitEncoder";
+        case kMVKCommandUseFillBuffer:                      return @"vkCmdFillBuffer BlitEncoder";
+        case kMVKCommandUseUpdateBuffer:                    return @"vkCmdUpdateBuffer BlitEncoder";
+        case kMVKCommandUseResetQueryPool:                  return @"vkCmdResetQueryPool BlitEncoder";
+        case kMVKCommandUseCopyQueryPoolResults:            return @"vkCmdCopyQueryPoolResults BlitEncoder";
+        default:                                            return @"Unknown Use BlitEncoder";
     }
 }
 
 NSString* mvkMTLComputeCommandEncoderLabel(MVKCommandUse cmdUse) {
     switch (cmdUse) {
-        case kMVKCommandUseDispatch:            return @"vkCmdDispatch ComputeEncoder";
-        case kMVKCommandUseCopyBuffer:          return @"vkCmdCopyBuffer ComputeEncoder";
-        case kMVKCommandUseCopyBufferToImage:   return @"vkCmdCopyBufferToImage ComputeEncoder";
-        case kMVKCommandUseCopyImageToBuffer:   return @"vkCmdCopyImageToBuffer ComputeEncoder";
-        case kMVKCommandUseFillBuffer:          return @"vkCmdFillBuffer ComputeEncoder";
-        case kMVKCommandUseClearColorImage:     return @"vkCmdClearColorImage ComputeEncoder";
-        case kMVKCommandUseTessellationVertexTessCtl: return @"vkCmdDraw (vertex and tess control stages) ComputeEncoder";
-        case kMVKCommandUseMultiviewInstanceCountAdjust: return @"vkCmdDraw (multiview instance count adjustment) ComputeEncoder";
-        case kMVKCommandUseCopyQueryPoolResults:return @"vkCmdCopyQueryPoolResults ComputeEncoder";
-        case kMVKCommandUseAccumOcclusionQuery: return @"Post-render-pass occlusion query accumulation ComputeEncoder";
-        default:                                return @"Unknown Use ComputeEncoder";
+        case kMVKCommandUseDispatch:                        return @"vkCmdDispatch ComputeEncoder";
+        case kMVKCommandUseCopyBuffer:                      return @"vkCmdCopyBuffer ComputeEncoder";
+        case kMVKCommandUseCopyBufferToImage:               return @"vkCmdCopyBufferToImage ComputeEncoder";
+        case kMVKCommandUseCopyImageToBuffer:               return @"vkCmdCopyImageToBuffer ComputeEncoder";
+        case kMVKCommandUseFillBuffer:                      return @"vkCmdFillBuffer ComputeEncoder";
+        case kMVKCommandUseClearColorImage:                 return @"vkCmdClearColorImage ComputeEncoder";
+        case kMVKCommandUseTessellationVertexTessCtl:       return @"vkCmdDraw (vertex and tess control stages) ComputeEncoder";
+        case kMVKCommandUseMultiviewInstanceCountAdjust:    return @"vkCmdDraw (multiview instance count adjustment) ComputeEncoder";
+        case kMVKCommandUseCopyQueryPoolResults:            return @"vkCmdCopyQueryPoolResults ComputeEncoder";
+        case kMVKCommandUseAccumOcclusionQuery:             return @"Post-render-pass occlusion query accumulation ComputeEncoder";
+        default:                                            return @"Unknown Use ComputeEncoder";
     }
 }
-

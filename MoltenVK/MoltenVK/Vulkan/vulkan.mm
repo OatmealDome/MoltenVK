@@ -131,6 +131,36 @@ static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t star
 		MVKAddCmd(baseCmdType ##Multi, vkCmdBuff, ##__VA_ARGS__);											\
 	}
 
+// Add one of nine commands, based on comparing a command parameter against four threshold values
+#define MVKAddCmdFrom5Thresholds(baseCmdType, value1, arg1Threshold1, arg1Threshold2,			\
+								 value2, arg2Threshold1, arg2Threshold2, arg2Threshold3,		\
+								 vkCmdBuff, ...)												\
+	if (value1 <= arg1Threshold1 && value2 <= arg2Threshold1) {									\
+		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 <= arg1Threshold2 && value2 <= arg2Threshold1) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 > arg1Threshold2 && value2 <= arg2Threshold1) {							\
+		MVKAddCmd(baseCmdType ##Multi ##arg2Threshold1, vkCmdBuff, ##__VA_ARGS__);				\
+	} else if (value1 <= arg1Threshold1 && value2 <= arg2Threshold2) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold2, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 <= arg1Threshold2 && value2 <= arg2Threshold2) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold2 ##arg2Threshold2, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 > arg1Threshold2 && value2 <= arg2Threshold2) {							\
+		MVKAddCmd(baseCmdType ##Multi ##arg2Threshold2, vkCmdBuff, ##__VA_ARGS__);				\
+	} else if (value1 <= arg1Threshold1 && value2 <= arg2Threshold3) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold1 ##arg2Threshold3, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 <= arg1Threshold2 && value2 <= arg2Threshold3) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold2 ##arg2Threshold3, vkCmdBuff, ##__VA_ARGS__);		\
+	} else if (value1 > arg1Threshold2 && value2 <= arg2Threshold3) {							\
+		MVKAddCmd(baseCmdType ##Multi ##arg2Threshold3, vkCmdBuff, ##__VA_ARGS__);				\
+	} else if (value1 <= arg1Threshold1 && value2 > arg2Threshold3) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold1 ##Multi, vkCmdBuff, ##__VA_ARGS__);				\
+	} else if (value1 <= arg1Threshold2 && value2 > arg2Threshold3) {							\
+		MVKAddCmd(baseCmdType ##arg1Threshold2 ##Multi, vkCmdBuff, ##__VA_ARGS__);				\
+	} else {																					\
+		MVKAddCmd(baseCmdType ##Multi ##Multi, vkCmdBuff, ##__VA_ARGS__);						\
+	}
+
 // Define an extension call as an alias of a core call
 #define MVK_PUBLIC_CORE_ALIAS(vkf)	MVK_PUBLIC_ALIAS(vkf##KHR, vkf)
 
@@ -367,7 +397,7 @@ MVK_PUBLIC_SYMBOL VkResult vkQueueSubmit(
 
 	MVKTraceVulkanCallStart();
 	MVKQueue* mvkQ = MVKQueue::getMVKQueue(queue);
-	VkResult rslt = mvkQ->submit(submitCount, pSubmits, fence);
+	VkResult rslt = mvkQ->submit(submitCount, pSubmits, fence, kMVKCommandUseQueueSubmit);
 	MVKTraceVulkanCallEnd();
 	return rslt;
 }
@@ -377,7 +407,7 @@ MVK_PUBLIC_SYMBOL VkResult vkQueueWaitIdle(
 	
 	MVKTraceVulkanCallStart();
 	MVKQueue* mvkQ = MVKQueue::getMVKQueue(queue);
-	VkResult rslt = mvkQ->waitIdle();
+	VkResult rslt = mvkQ->waitIdle(kMVKCommandUseQueueWaitIdle);
 	MVKTraceVulkanCallEnd();
 	return rslt;
 }
@@ -1863,13 +1893,50 @@ MVK_PUBLIC_SYMBOL void vkCmdPushConstants(
 	MVKTraceVulkanCallEnd();
 }
 
+// Consolidation function
+static void mvkCmdBeginRenderPass(
+	VkCommandBuffer								commandBuffer,
+	const VkRenderPassBeginInfo*				pRenderPassBegin,
+	const VkSubpassBeginInfo*					pSubpassBeginInfo) {
+
+	VkRenderPassAttachmentBeginInfo* pAttachmentBegin = nullptr;
+	for (const auto* next = (VkBaseInStructure*)pRenderPassBegin->pNext; next; next = next->pNext) {
+		switch(next->sType) {
+			case VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO: {
+				pAttachmentBegin = (VkRenderPassAttachmentBeginInfo*)next;
+				break;
+			}
+			default:
+				break;
+		}
+	}
+	auto attachments = (pAttachmentBegin
+						? MVKArrayRef<MVKImageView*>((MVKImageView**)pAttachmentBegin->pAttachments,
+													 pAttachmentBegin->attachmentCount)
+						: ((MVKFramebuffer*)pRenderPassBegin->framebuffer)->getAttachments());
+	
+	MVKAddCmdFrom5Thresholds(BeginRenderPass,
+							 pRenderPassBegin->clearValueCount, 1, 2,
+							 attachments.size, 0, 1, 2,
+							 commandBuffer,
+							 pRenderPassBegin,
+							 pSubpassBeginInfo,
+							 attachments);
+}
+
 MVK_PUBLIC_SYMBOL void vkCmdBeginRenderPass(
     VkCommandBuffer                             commandBuffer,
     const VkRenderPassBeginInfo*                pRenderPassBegin,
     VkSubpassContents							contents) {
-	
+
 	MVKTraceVulkanCallStart();
-	MVKAddCmdFrom2Thresholds(BeginRenderPass, pRenderPassBegin->clearValueCount, 1, 2, commandBuffer,pRenderPassBegin, contents);
+
+	VkSubpassBeginInfo spBeginInfo;
+	spBeginInfo.sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO;
+	spBeginInfo.pNext = nullptr;
+	spBeginInfo.contents = contents;
+
+	mvkCmdBeginRenderPass(commandBuffer, pRenderPassBegin, &spBeginInfo);
 	MVKTraceVulkanCallEnd();
 }
 
@@ -2283,7 +2350,7 @@ MVK_PUBLIC_SYMBOL void vkCmdBeginRenderPass2KHR(
 	const VkSubpassBeginInfo*					pSubpassBeginInfo) {
 
 	MVKTraceVulkanCallStart();
-	MVKAddCmdFrom2Thresholds(BeginRenderPass, pRenderPassBegin->clearValueCount, 1, 2, commandBuffer, pRenderPassBegin, pSubpassBeginInfo);
+	mvkCmdBeginRenderPass(commandBuffer, pRenderPassBegin, pSubpassBeginInfo);
 	MVKTraceVulkanCallEnd();
 }
 

@@ -4,7 +4,7 @@
 
 
 
-#What's New in MoltenVK
+# What's New in MoltenVK
 
 Copyright (c) 2015-2021 [The Brenwill Workshop Ltd.](http://www.brenwill.com)
 
@@ -18,6 +18,8 @@ MoltenVK 1.1.4
 
 Released TBD
 
+- Add support for extensions:
+	- `VK_KHR_imageless_framebuffer`
 - Make `vkGetPastPresentationTimingGOOGLE()` queuing behavior compliant with Vulkan spec.
 - Expose `vkGetIOSurfaceMVK()` and `vkUseIOSurfaceMVK()` without requiring _Objective-C_.
 - Support _Xcode 12.5_ build settings, build warnings, and SDK change to availability of
@@ -28,6 +30,7 @@ Released TBD
 - Fix crash when requesting `MTLCommandBuffer` logs in runtime debug mode on older OS versions.
 - Fix synchronization issue with locking `MTLArgumentEncoder` for Metal Argument Buffers.
 - Fix race condition on submission fence during device loss.
+- Fix crash using memoryless storage for input attachments on Apple Silicon.
 - On command buffer submission failure, if `MVKConfiguration::resumeLostDevice` enabled,  do not release 
   waits on `VkDevice`, and do not return `VK_ERROR_DEVICE_LOST`, unless `VkPhysicalDevice` is also lost.
 - Fix inconsistent handling of linear attachment decisions on Apple Silicon.
@@ -166,7 +169,7 @@ Released 2021/02/22
 MoltenVK 1.1.1
 --------------
 
-Released 2010/12/09
+Released 2020/12/09
 
 - Add support for extensions:
 	- `VK_KHR_sampler_mirror_clamp_to_edge` (iOS)
