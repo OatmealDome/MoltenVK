@@ -1510,6 +1510,7 @@
 		2FEA0AB824902F9F00EEF3AD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=appletvsimulator*]" = x86_64;
 				SDKROOT = appletvos;
 			};
 			name = Debug;
@@ -1517,6 +1518,7 @@
 		2FEA0AB924902F9F00EEF3AD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=appletvsimulator*]" = x86_64;
 				SDKROOT = appletvos;
 			};
 			name = Release;
@@ -1524,6 +1526,7 @@
 		A9B8EE1E1A98D796009C5A02 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = x86_64;
 				SDKROOT = iphoneos;
 			};
 			name = Debug;
@@ -1531,6 +1534,7 @@
 		A9B8EE1F1A98D796009C5A02 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = x86_64;
 				SDKROOT = iphoneos;
 			};
 			name = Release;
