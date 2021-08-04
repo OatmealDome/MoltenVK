@@ -1591,7 +1591,6 @@ void MVKPhysicalDevice::initFeatures() {
     _features.fullDrawIndexUint32 = true;
     _features.independentBlend = true;
     _features.sampleRateShading = true;
-    _features.logicOp = true;
     _features.depthBiasClamp = true;
     _features.fillModeNonSolid = true;
     _features.largePoints = true;
@@ -1726,7 +1725,7 @@ void MVKPhysicalDevice::initFeatures() {
 //    VkBool32    tessellationShader;                           // done
 //    VkBool32    sampleRateShading;                            // done
 //    VkBool32    dualSrcBlend;                                 // done
-//    VkBool32    logicOp;                                      // done
+//    VkBool32    logicOp;
 //    VkBool32    multiDrawIndirect;                            // done
 //    VkBool32    drawIndirectFirstInstance;                    // done
 //    VkBool32    depthClamp;                                   // done
