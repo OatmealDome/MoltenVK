@@ -1532,6 +1532,11 @@ void MVKPhysicalDevice::initMetalFeatures() {
 	_metalFeatures.mslVersion = SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::make_msl_version(maj, min);
 
 	switch (_metalFeatures.mslVersionEnum) {
+#if MVK_XCODE_13
+		case MTLLanguageVersion2_4:
+			setMSLVersion(2, 4);
+			break;
+#endif
 #if MVK_XCODE_12
 		case MTLLanguageVersion2_3:
 			setMSLVersion(2, 3);
@@ -3617,7 +3622,7 @@ VkResult MVKDevice::invalidateMappedMemoryRanges(uint32_t memRangeCount, const V
 		for (uint32_t i = 0; i < memRangeCount; i++) {
 			const VkMappedMemoryRange* pMem = &pMemRanges[i];
 			MVKDeviceMemory* mvkMem = (MVKDeviceMemory*)pMem->memory;
-			VkResult r = mvkMem->pullFromDevice(pMem->offset, pMem->size, false, &mvkBlitEnc);
+			VkResult r = mvkMem->pullFromDevice(pMem->offset, pMem->size, &mvkBlitEnc);
 			if (rslt == VK_SUCCESS) { rslt = r; }
 		}
 		if (mvkBlitEnc.mtlBlitEncoder) { [mvkBlitEnc.mtlBlitEncoder endEncoding]; }
