@@ -89,6 +89,7 @@ MVK_PUBLIC_SYMBOL std::string SPIRVToMSLConversionOptions::printMSLVersion(uint3
 
 MVK_PUBLIC_SYMBOL SPIRVToMSLConversionOptions::SPIRVToMSLConversionOptions() {
 	mslOptions.pad_fragment_output_components = true;
+	mslOptions.ios_use_framebuffer_fetch_subpasses = true;
 
 #if MVK_MACOS
 	mslOptions.platform = CompilerMSL::Options::macOS;
